@@ -6,6 +6,7 @@ const STATUS: Record<ApiError["error"], number> = {
   invalid_request: 400,
   not_found: 404,
   rate_limited: 429,
+  daily_limit_reached: 429,
   upstream_unavailable: 502,
 };
 

@@ -9,6 +9,14 @@ interface Props {
   onRetryGps: () => void;
 }
 
+async function readError(res: Response): Promise<string | undefined> {
+  try {
+    return ((await res.json()) as { error?: string }).error;
+  } catch {
+    return undefined;
+  }
+}
+
 const REASON_TEXT: Record<Props["reason"], string> = {
   denied: "Location access is turned off. Enter a ZIP code or address instead.",
   timeout: "We couldn't get your location in time. Enter a ZIP code or address, or try again.",
@@ -32,6 +40,8 @@ export function LocationFallback({ reason, onLocation, onRetryGps }: Props) {
       const res = await fetch(`/api/geocode?${new URLSearchParams({ q: query.trim() })}`);
       if (res.ok) {
         onLocation((await res.json()) as GeocodeResponse);
+      } else if (res.status === 429 && (await readError(res)) === "daily_limit_reached") {
+        setProblem("This app has reached its daily search limit. Please try again tomorrow.");
       } else if (res.status === 404) {
         setProblem("We couldn't find that place. Try a ZIP code or a fuller address.");
       } else {

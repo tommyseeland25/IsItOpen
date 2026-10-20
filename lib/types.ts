@@ -38,6 +38,7 @@ export type ApiErrorCode =
   | "invalid_request"
   | "not_found"
   | "rate_limited"
+  | "daily_limit_reached"
   | "upstream_unavailable";
 
 export interface ApiError {

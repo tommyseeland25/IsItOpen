@@ -16,7 +16,7 @@ Built with Next.js (App Router), TypeScript, Tailwind CSS, and the Google Places
    - *Application restrictions*: the key is used from a server, so "Websites" (HTTP referrer) restrictions won't work. Use **IP addresses** if your host has fixed egress IPs (Vercel doesn't on standard plans); otherwise rely on the API restriction plus a low quota and budget alert.
 5. Optionally lower per-day quotas under Quotas & System Limits to cap spend.
 
-Opening-hours fields are billed at a higher Places tier, so the app requests only the fields it needs and caches results in memory for 5 minutes.
+Opening-hours fields are billed at a higher Places tier, so the app requests only the fields it needs and caches results in memory for 10 minutes.
 
 ## 2. Run locally
 
@@ -45,6 +45,24 @@ npm run build   # production build
 3. Deploy. Each preview URL is HTTPS, so geolocation works on your phone.
 
 The server cache is in memory per serverless instance, so it's best-effort on Vercel.
+
+## Staying within the free tier
+
+Hours of operation are an **Enterprise-tier** field on Places API (New) Nearby Search, which includes **1,000 free calls per month**. The app has two layers of protection so it can't go past that:
+
+1. **App-side daily cap (best-effort).** Real Google calls are counted per UTC day and refused with HTTP 429 `{"error":"daily_limit_reached"}` once the cap is hit; the UI then shows "This app has reached its daily search limit. Please try again tomorrow." Cache hits are never counted. Configure with:
+   - `DAILY_NEARBY_SEARCH_LIMIT` (default `30`, about 930 calls in a 31-day month)
+   - `GEOCODE_DAILY_LIMIT` (default `200`, geocoding is billed separately)
+
+   > **Caveat:** the counter is in memory. On serverless hosts like Vercel it resets on cold starts and isn't shared between instances, so it is best-effort only. **The Google Cloud quota below is the real hard cap.**
+
+2. **Google Cloud quota (the hard cap).** In the Cloud Console:
+   1. Go to APIs & Services → Enabled APIs & services → **Places API (New)** → **Quotas & System Limits**.
+   2. Find the Nearby Search quota (a "requests per day" or "per minute" line; exact names change, so look for "Nearby Search") and click the pencil to edit. Set a daily limit of about **30** (for example, "Nearby Search requests per day"). If only per-minute quotas are offered, set the lowest value you can and rely on the budget alert and the app cap.
+   3. Do the same under **Geocoding API** → Quotas if you want a hard geocoding cap.
+   4. Keep the **budget alert** from step 1 of the key setup. Budgets only notify; they don't stop spending. Quotas are what actually refuse requests.
+
+Also in-app: results are cached for 10 minutes (keyed by coordinates rounded to 3 decimals, about 100 m), identical simultaneous requests share one Google call, invalid coordinates are rejected before Google is called, and the Refresh button ignores taps within 5 seconds of the last request.
 
 ## How it works
 

@@ -1,6 +1,7 @@
 // Server-only: this module reads the API key. Never import it from client code.
 import { METERS_PER_MILE, haversineMiles } from "./distance";
 import { TtlCache } from "./cache";
+import { DailyLimiter, parseLimit } from "./usage-limit";
 import type {
   ApiErrorCode,
   GeocodeResponse,
@@ -22,7 +23,7 @@ const FIELD_MASK = [
   "places.businessStatus",
 ].join(",");
 
-const CACHE_TTL_MS = 5 * 60_000;
+const CACHE_TTL_MS = 10 * 60_000;
 const MAX_RESULTS = 20;
 
 /** An error whose `code` is safe to show users; `detail` is for server logs only. */
@@ -55,6 +56,23 @@ interface GooglePlace {
 
 const placesCache = new TtlCache<GooglePlace[]>(CACHE_TTL_MS);
 const geocodeCache = new TtlCache<GeocodeResponse>(CACHE_TTL_MS);
+
+// Only real Google calls are counted; cache hits never reach these limiters.
+const nearbyLimiter = new DailyLimiter(parseLimit(process.env.DAILY_NEARBY_SEARCH_LIMIT, 30));
+const geocodeLimiter = new DailyLimiter(parseLimit(process.env.GEOCODE_DAILY_LIMIT, 200));
+
+/** Concurrent identical requests share one Google call (and one count). */
+const inflightPlaces = new Map<string, Promise<GooglePlace[]>>();
+const inflightGeocode = new Map<string, Promise<GeocodeResponse>>();
+
+function consumeOrThrow(limiter: DailyLimiter, label: string): void {
+  const { allowed, count, limit } = limiter.tryConsume();
+  if (!allowed) {
+    console.warn(`[google] ${label} daily limit reached (${limit}); not calling Google`);
+    throw new ApiFailure("daily_limit_reached");
+  }
+  console.info(`[google] ${label} call #${count} today (limit ${limit})`);
+}
 
 function apiKey(): string {
   const key = process.env.GOOGLE_PLACES_API_KEY;
@@ -118,11 +136,29 @@ async function fetchPlaces(
   const cached = placesCache.get(key);
   if (cached) return cached;
 
+  const pending = inflightPlaces.get(key);
+  if (pending) return pending;
+  const request = callNearbySearch(key, lat, lng, radiusMiles).finally(() =>
+    inflightPlaces.delete(key),
+  );
+  inflightPlaces.set(key, request);
+  return request;
+}
+
+async function callNearbySearch(
+  key: string,
+  lat: number,
+  lng: number,
+  radiusMiles: number,
+): Promise<GooglePlace[]> {
+  const apiKeyValue = apiKey();
+  consumeOrThrow(nearbyLimiter, "Nearby Search");
+
   const res = await googleFetch(PLACES_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Goog-Api-Key": apiKey(),
+      "X-Goog-Api-Key": apiKeyValue,
       "X-Goog-FieldMask": FIELD_MASK,
     },
     body: JSON.stringify({
@@ -176,7 +212,18 @@ export async function geocode(query: string): Promise<GeocodeResponse> {
   const cached = geocodeCache.get(cacheKey);
   if (cached) return cached;
 
-  const url = `${GEOCODE_URL}?${new URLSearchParams({ address: query, key: apiKey() })}`;
+  const pending = inflightGeocode.get(cacheKey);
+  if (pending) return pending;
+  const request = callGeocode(cacheKey, query).finally(() => inflightGeocode.delete(cacheKey));
+  inflightGeocode.set(cacheKey, request);
+  return request;
+}
+
+async function callGeocode(cacheKey: string, query: string): Promise<GeocodeResponse> {
+  const key = apiKey();
+  consumeOrThrow(geocodeLimiter, "Geocoding");
+
+  const url = `${GEOCODE_URL}?${new URLSearchParams({ address: query, key })}`;
   const res = await googleFetch(url);
   if (!res.ok) throw failureFromStatus(res.status, await res.text());
 

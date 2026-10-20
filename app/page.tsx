@@ -17,6 +17,10 @@ const ERROR_COPY: Record<RestaurantsError, { title: string; body: string }> = {
     title: "Can't reach the server",
     body: "Check your internet connection and try again.",
   },
+  daily_limit: {
+    title: "Daily search limit reached",
+    body: "This app has reached its daily search limit. Please try again tomorrow.",
+  },
   rate_limited: {
     title: "We're a bit busy",
     body: "Too many requests right now. Please try again in a minute.",
@@ -49,7 +53,7 @@ export default function Home() {
   }, []);
 
   const coords = manual ?? (geo.state.status === "granted" ? geo.state : null);
-  const { restaurants, loading, error, refetch } = useRestaurants(coords, radiusMiles);
+  const { restaurants, loading, error, refetch, coolingDown } = useRestaurants(coords, radiusMiles);
 
   const visible = useMemo(() => {
     if (!restaurants) return [];
@@ -60,9 +64,14 @@ export default function Home() {
 
   function refresh() {
     setNow(Date.now());
-    if (manual) refetch();
-    else requestGps();
+    if (manual) {
+      refetch(); // ignored during the cooldown
+    } else if (!coolingDown) {
+      requestGps();
+    }
   }
+
+  const limitReached = error === "daily_limit";
 
   const needsFallback = !manual && geo.state.status === "error";
   const locating = !manual && (geo.state.status === "idle" || geo.state.status === "loading");
@@ -80,7 +89,7 @@ export default function Home() {
           <button
             type="button"
             onClick={refresh}
-            disabled={loading || locating}
+            disabled={loading || locating || coolingDown || limitReached}
             aria-label="Refresh"
             className="flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-xl border border-stone-300 px-3 text-base font-medium disabled:opacity-50 dark:border-stone-700"
           >
@@ -122,7 +131,10 @@ export default function Home() {
         {coords && loading && <ListSkeleton />}
 
         {coords && !loading && error && (
-          <Message title={ERROR_COPY[error].title} action={{ label: "Try again", onClick: refetch }}>
+          <Message
+            title={ERROR_COPY[error].title}
+            action={limitReached ? undefined : { label: "Try again", onClick: refetch }}
+          >
             {ERROR_COPY[error].body}
           </Message>
         )}
